@@ -14,9 +14,10 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
-use crate::config::MAX_APP_NUM;
+use crate::config::{MAX_APP_NUM, MAX_SYSCALL_NUM};
 use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
+use crate::timer::get_time_ms;
 use lazy_static::*;
 use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
@@ -54,6 +55,8 @@ lazy_static! {
         let mut tasks = [TaskControlBlock {
             task_cx: TaskContext::zero_init(),
             task_status: TaskStatus::UnInit,
+            task_syscall_times: [0; MAX_SYSCALL_NUM],
+            task_first_start: 0,
         }; MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
@@ -123,6 +126,10 @@ impl TaskManager {
             let current = inner.current_task;
             inner.tasks[next].task_status = TaskStatus::Running;
             inner.current_task = next;
+            // give the first call time for this task
+            if inner.tasks[next].task_first_start == 0 {
+                inner.tasks[next].task_first_start = get_time_ms();
+            }
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
             drop(inner);
@@ -135,11 +142,48 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    /// set the current task syscalls times
+    fn set_current_task_syscall_times(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].task_syscall_times[syscall_id] += 1;
+    }
+
+    /// get the syscalls_times about current task
+    fn get_current_task_syscall_times(&self) -> [u32; MAX_SYSCALL_NUM]{
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        // dont need clone because [u32; ..] have copy trait
+        inner.tasks[current].task_syscall_times
+    }
+
+    /// get the first time be called of current task
+    fn get_first_time_becalled(&self) -> usize {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].task_first_start
+    }
 }
 
 /// Run the first task in task list.
 pub fn run_first_task() {
     TASK_MANAGER.run_first_task();
+}
+
+/// set the current task syscalls times
+pub fn set_current_task_syscall_times(syscall_id: usize) {
+    TASK_MANAGER.set_current_task_syscall_times(syscall_id);
+}
+
+/// get the current task syscalls times
+pub fn get_current_task_syscall_times() -> [u32; MAX_SYSCALL_NUM]{
+    TASK_MANAGER.get_current_task_syscall_times()
+}
+
+/// get current task's first time be called
+pub fn get_first_time_becalled() -> usize {
+    TASK_MANAGER.get_first_time_becalled()
 }
 
 /// Switch current `Running` task to the task we have found,
