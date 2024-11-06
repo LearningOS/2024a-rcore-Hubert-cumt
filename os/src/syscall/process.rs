@@ -1,9 +1,9 @@
 //! Process management syscalls
 use crate::{
-    config::MAX_SYSCALL_NUM,
-    task::{
-        change_program_brk, exit_current_and_run_next, suspend_current_and_run_next, TaskStatus,
-    },
+    config::MAX_SYSCALL_NUM, mm::{check_rest_memory, VirtAddr}, task::{
+        change_program_brk, do_memory_map, do_memory_unmap, exit_current_and_run_next, get_first_running_time, get_syscall_times, suspend_current_and_run_next, trans_vir2phy, TaskStatus
+    }, timer::{get_time_ms, get_time_us}
+    
 };
 
 #[repr(C)]
@@ -41,29 +41,105 @@ pub fn sys_yield() -> isize {
 /// YOUR JOB: get time with second and microsecond
 /// HINT: You might reimplement it with virtual memory management.
 /// HINT: What if [`TimeVal`] is splitted by two pages ?
-pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
+pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
     trace!("kernel: sys_get_time");
-    -1
+
+    let sec = get_time_ms() / 1000;
+    let usec = get_time_us();
+
+    let va = VirtAddr(ts as usize);
+    let phy_address = trans_vir2phy(va.0) as *mut TimeVal;
+
+    unsafe {
+        *phy_address = TimeVal {
+            sec: sec,
+            usec: usec,
+        };
+    }
+    
+    0
 }
 
 /// YOUR JOB: Finish sys_task_info to pass testcases
 /// HINT: You might reimplement it with virtual memory management.
 /// HINT: What if [`TaskInfo`] is splitted by two pages ?
-pub fn sys_task_info(_ti: *mut TaskInfo) -> isize {
-    trace!("kernel: sys_task_info NOT IMPLEMENTED YET!");
-    -1
+pub fn sys_task_info(ti: *mut TaskInfo) -> isize {
+    trace!("kernel: sys_task_info");
+    
+    let status = TaskStatus::Running;
+    let syscall_times = get_syscall_times();
+    let time = get_time_ms() - get_first_running_time();
+    
+    let va = VirtAddr(ti as usize);
+    let pa = trans_vir2phy(va.0) as *mut TaskInfo;
+
+    unsafe {
+        *pa = TaskInfo {
+            status: status,
+            syscall_times: syscall_times,
+            time: time,
+        };
+    }
+
+    0
 }
 
 // YOUR JOB: Implement mmap.
-pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
-    trace!("kernel: sys_mmap NOT IMPLEMENTED YET!");
-    -1
+pub fn sys_mmap(start: usize, len: usize, port: usize) -> isize {
+    trace!("kernel: sys_mmap");
+    let vst = VirtAddr(start);
+
+    // check the start address is valid
+    if vst.page_offset() != 0 {
+        return -1;
+    }
+
+    // check the port is valid
+    if (port & 0x7 == 0) || (port & ! 0x7 != 0) {
+        return -1;
+    }
+
+    // println!("start: {:#x}, len: {:#x}, port: {:#x}", start, len, port);
+    
+
+    // Align the length to page size
+    let ved = VirtAddr::from(VirtAddr(start + len).ceil());
+
+    // println!("vst: {:#x}, ved: {:#x}", vst.0, ved.0);
+
+    // check the length is valid
+    if check_rest_memory(ved.0 - vst.0) == false {
+        return -1;
+    }
+
+    // get the memory set of current task
+    if do_memory_map(vst, ved, port) == -1 {
+        return -1;
+    }
+
+    
+
+    0
 }
 
 // YOUR JOB: Implement munmap.
-pub fn sys_munmap(_start: usize, _len: usize) -> isize {
+pub fn sys_munmap(start: usize, len: usize) -> isize {
     trace!("kernel: sys_munmap NOT IMPLEMENTED YET!");
-    -1
+    let vst = VirtAddr(start);
+
+    // check the start address is valid
+    if vst.page_offset() != 0 {
+        return -1;
+    }
+
+    // Align the length to page size
+    let ved = VirtAddr::from(VirtAddr(start + len).ceil());
+
+    if do_memory_unmap(vst, ved) == -1 {
+        return -1;
+    }
+
+    0
 }
 /// change data segment size
 pub fn sys_sbrk(size: i32) -> isize {
