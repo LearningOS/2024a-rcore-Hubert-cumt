@@ -14,13 +14,16 @@ mod page_table;
 
 use address::VPNRange;
 pub use address::{PhysAddr, PhysPageNum, StepByOne, VirtAddr, VirtPageNum};
-pub use frame_allocator::{frame_alloc, frame_dealloc, FrameTracker};
+pub use frame_allocator::{
+    frame_alloc, frame_dealloc, check_rest_memory,  
+    FrameTracker};
 pub use memory_set::remap_test;
 pub use memory_set::{kernel_token, MapPermission, MemorySet, KERNEL_SPACE};
 use page_table::PTEFlags;
 pub use page_table::{
-    translated_byte_buffer, translated_ref, translated_refmut, translated_str, PageTable,
-    PageTableEntry, UserBuffer, UserBufferIterator,
+    translated_byte_buffer, translated_ref, translated_refmut, translated_str, 
+    translate_va_to_pa, 
+    PageTable,PageTableEntry, UserBuffer, UserBufferIterator,
 };
 
 /// initiate heap allocator, frame allocator and kernel space

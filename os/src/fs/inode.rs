@@ -4,7 +4,7 @@
 //!
 //! `UPSafeCell<OSInodeInner>` -> `OSInode`: for static `ROOT_INODE`,we
 //! need to wrap `OSInodeInner` into `UPSafeCell`
-use super::File;
+use super::{File, Stat, StatMode};
 use crate::drivers::BLOCK_DEVICE;
 use crate::mm::UserBuffer;
 use crate::sync::UPSafeCell;
@@ -124,6 +124,33 @@ pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
     }
 }
 
+/// Create a Link to a old file
+pub fn link(old_name: &str, new_name: &str) -> isize {
+    let old_file = ROOT_INODE.find(old_name);
+    match old_file {
+        Some(old_inode) => {
+            ROOT_INODE.create_linkat(new_name, old_inode.get_inode_id());
+        }
+        None => {
+            return -1;
+        }
+    }
+    
+    0
+}
+
+/// unlink a file
+pub fn unlink(name: &str) -> isize {
+    let file = ROOT_INODE.find(name);
+    match file {
+        Some(_) => {
+            ROOT_INODE.un_linkat(name)
+        }
+        None => {
+            return -1;
+        }
+    }
+}
 impl File for OSInode {
     fn readable(&self) -> bool {
         self.readable
@@ -154,5 +181,30 @@ impl File for OSInode {
             total_write_size += write_size;
         }
         total_write_size
+    }
+    fn stat(&self) -> Option<super::Stat> {
+        let inner = self.inner.exclusive_access();
+        Some(Stat {
+            dev: 0,
+            ino: inner.inode.get_inode_id() as u64,
+            mode: {
+                match inner.inode.check_is_dir() {
+                    true => StatMode::DIR,
+                    false => StatMode::FILE,
+                }
+            },
+            nlink: {
+                let mut count = 0;
+                let target = inner.inode.get_inode_id();
+                for (_, inode) in ROOT_INODE.ls_with_inode_id() {
+                    println!("inode: {}  target: {}", inode, target);
+                    if inode == target {
+                        count += 1;
+                    }
+                }
+                count
+            },
+            pad: [0; 7],
+        })
     }
 }

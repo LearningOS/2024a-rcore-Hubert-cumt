@@ -1,7 +1,7 @@
 //! Implementation of [`FrameAllocator`] which
 //! controls all the frames in the operating system.
 use super::{PhysAddr, PhysPageNum};
-use crate::config::MEMORY_END;
+use crate::config::{MEMORY_END, PAGE_SIZE};
 use crate::sync::UPSafeCell;
 use alloc::vec::Vec;
 use core::fmt::{self, Debug, Formatter};
@@ -114,6 +114,13 @@ pub fn frame_alloc() -> Option<FrameTracker> {
 /// Deallocate a physical page frame with a given ppn
 pub fn frame_dealloc(ppn: PhysPageNum) {
     FRAME_ALLOCATOR.exclusive_access().dealloc(ppn);
+}
+
+/// judge if the rest of the physical page frames are enough
+pub fn check_rest_memory(size:usize) -> bool {
+    let allocator = FRAME_ALLOCATOR.exclusive_access();
+    let rest = (allocator.end - allocator.current) * PAGE_SIZE;
+    rest >= size
 }
 
 #[allow(unused)]

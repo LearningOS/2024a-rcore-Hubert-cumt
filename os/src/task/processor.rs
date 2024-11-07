@@ -7,7 +7,10 @@
 use super::__switch;
 use super::{fetch_task, TaskStatus};
 use super::{TaskContext, TaskControlBlock};
+use crate::config::MAX_SYSCALL_NUM;
+use crate::mm::{translate_va_to_pa, MapPermission, PhysAddr, VirtAddr, VirtPageNum};
 use crate::sync::UPSafeCell;
+use crate::timer::get_time_ms;
 use crate::trap::TrapContext;
 use alloc::sync::Arc;
 use lazy_static::*;
@@ -44,6 +47,78 @@ impl Processor {
     pub fn current(&self) -> Option<Arc<TaskControlBlock>> {
         self.current.as_ref().map(Arc::clone)
     }
+
+    /// translate virtual address to physical address
+    fn trans_vir2phy(&self, vir_addr: VirtAddr) -> Option<PhysAddr> {
+        let token = self.current().unwrap().inner_exclusive_access().memory_set.token();
+        translate_va_to_pa(token, vir_addr)
+    }
+
+    /// count the syscall times of current task
+    fn count_syscall(&mut self, syscall_id: usize) {
+        let curr = self.current().unwrap();
+        let mut inner = curr.inner_exclusive_access();
+        inner.syscall_times[syscall_id] += 1;
+    }
+
+    /// get the syscall times of current task
+    fn get_sycall_times(&self) -> [u32; MAX_SYSCALL_NUM] {
+        self.current().unwrap().inner_exclusive_access().syscall_times
+    }
+
+    /// get the first time called of current task
+    fn get_first_time_called(&self) -> usize {
+        self.current().unwrap().inner_exclusive_access().time_first_called
+    }
+
+    /// map a new memory
+    fn  do_memory_map(&mut self, start: VirtAddr, end: VirtAddr, port: usize) -> isize {
+        let curr = self.current().unwrap();
+        let mut inner = curr.inner_exclusive_access();
+        
+        // Transfer port to permission
+        let mut permission = 0 as u8;
+        // Readable
+        if port & 0x1 != 0 {
+            permission |= MapPermission::R.bits();
+        }
+        // Writable
+        if port & 0x2 != 0 {
+            permission |= MapPermission::W.bits();
+        }
+        // Executable
+        if port & 0x4 != 0 {
+            permission |= MapPermission::X.bits();
+        }
+        // User accessible : PTE_U
+        permission |= MapPermission::U.bits();
+         
+        let permission = MapPermission::from_bits(permission).unwrap();
+        if inner.memory_set.insert_framed_area(start, end, permission) == -1 {
+            return -1;
+        }
+        
+        0
+    }
+
+    /// unmap a memory
+    fn do_memory_unmap(&mut self, vst: VirtPageNum, ved: VirtPageNum) -> isize {
+        let curr = self.current().unwrap();
+        let mut inner = curr.inner_exclusive_access();
+        if inner.memory_set.remove_by_given(vst, ved) == -1 {
+            return -1;
+        }
+        
+        0
+    }
+
+    /// set the priority of current task
+    fn set_prio(&mut self, prio: isize) -> isize {
+        let curr = self.current().unwrap();
+        let mut inner = curr.inner_exclusive_access();
+        inner.priority = prio;
+        inner.priority
+    }
 }
 
 lazy_static! {
@@ -60,6 +135,9 @@ pub fn run_tasks() {
             // access coming task TCB exclusively
             let mut task_inner = task.inner_exclusive_access();
             let next_task_cx_ptr = &task_inner.task_cx as *const TaskContext;
+            if task_inner.time_first_called == 0 {
+                task_inner.time_first_called = get_time_ms();
+            }
             task_inner.task_status = TaskStatus::Running;
             // release coming task_inner manually
             drop(task_inner);
@@ -108,4 +186,39 @@ pub fn schedule(switched_task_cx_ptr: *mut TaskContext) {
     unsafe {
         __switch(switched_task_cx_ptr, idle_task_cx_ptr);
     }
+}
+
+/// Transfer virtual address to physical address
+pub fn translate_address(vir_addr: VirtAddr) -> Option<PhysAddr> {
+    PROCESSOR.exclusive_access().trans_vir2phy(vir_addr)
+}
+
+/// count the syscall
+pub fn count_syscall(syscall_id: usize) {
+    PROCESSOR.exclusive_access().count_syscall(syscall_id);
+}
+
+/// get the syscall times
+pub fn get_syscall_times() -> [u32; MAX_SYSCALL_NUM] {
+    PROCESSOR.exclusive_access().get_sycall_times()
+}
+
+/// get the first time called
+pub fn get_first_time_called() -> usize {
+    PROCESSOR.exclusive_access().get_first_time_called()
+}
+
+/// map a new memory
+pub fn do_memory_map(start: VirtAddr, end: VirtAddr, port: usize) -> isize {
+    PROCESSOR.exclusive_access().do_memory_map(start, end, port)
+}
+
+/// unmap a memory
+pub fn do_memory_unmap(start: VirtPageNum, end: VirtPageNum) -> isize {
+    PROCESSOR.exclusive_access().do_memory_unmap(start, end)
+}
+
+/// set the priority of current task
+pub fn set_prio(prio: isize) -> isize {
+    PROCESSOR.exclusive_access().set_prio(prio)
 }
