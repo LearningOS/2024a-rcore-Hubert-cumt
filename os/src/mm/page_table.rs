@@ -274,3 +274,9 @@ impl Iterator for UserBufferIterator {
         }
     }
 }
+
+/// get the physical address from the virtual address
+pub fn transfer_vir2phy(token: usize, va: usize) -> usize {
+    let page_table = PageTable::from_token(token);
+    page_table.translate_va(VirtAddr::from(va)).unwrap().into()
+}

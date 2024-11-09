@@ -49,6 +49,70 @@ pub struct ProcessControlBlockInner {
     pub semaphore_list: Vec<Option<Arc<Semaphore>>>,
     /// condvar list
     pub condvar_list: Vec<Option<Arc<Condvar>>>,
+    /// checker for deadlock detection
+    pub deadlock_checker: DeadlockChecker,
+
+}
+
+/// Deadlock checker for PCB
+pub struct DeadlockChecker {
+    /// the avialable resources
+    pub available: Vec<usize>,
+    /// the allocated resources
+    pub allocated: Vec<Vec<usize>>,
+    /// the needed resources
+    pub needed: Vec<Vec<usize>>,
+    /// the finish status of each task
+    pub finish: Vec<bool>,
+}
+
+impl DeadlockChecker {
+    /// new deadlock checker
+    pub fn new() -> Self {
+        Self {
+            available: Vec::new(),
+            allocated: Vec::new(),
+            needed: Vec::new(),
+            finish: Vec::new(),
+        }
+    }
+    /// init deadlock checker
+    pub fn init(&mut self) {
+        self.available.resize(2, 0);
+        self.allocated.push(vec![0, 0]);
+        self.needed.push(vec![0, 0]);
+        self.finish.push(true);
+    }
+    /// add the aviable resources
+    /// id: the id of the resource
+    /// At present, we only have two resources: mutex and semaphore
+    pub fn add_avialable(&mut self, kind: usize) {
+        self.available[kind] += 1;
+    }
+    /// alloc the resources
+    pub fn alloc(&mut self, id: usize) {
+        self.allocated[id][0] += self.needed[id][0];
+        self.allocated[id][1] += self.needed[id][1];
+        self.needed[id][0] = 0;
+        self.needed[id][1] = 0;
+    }
+    /// when the resource is released remove the allocated resources
+    pub fn remove(&mut self, id: usize, kind: usize) {
+        self.allocated[id][kind] -= 1;
+        self.needed[id][kind] = 0;
+    }
+    /// detect deadlock
+    pub fn check(&mut self, id: usize, kind: usize) -> usize {
+        if self.available[kind] > self.needed[id][kind] {
+            self.needed[id][kind] += 1;
+            0
+        } else {
+            return 0xDEAD;
+        }
+    }    
+    pub fn finish(&mut self, id: usize) {
+        self.finish[id] = true;
+    }
 }
 
 impl ProcessControlBlockInner {
@@ -119,6 +183,7 @@ impl ProcessControlBlock {
                     mutex_list: Vec::new(),
                     semaphore_list: Vec::new(),
                     condvar_list: Vec::new(),
+                    deadlock_checker: DeadlockChecker::new(),
                 })
             },
         });
@@ -144,6 +209,7 @@ impl ProcessControlBlock {
         // add main thread to the process
         let mut process_inner = process.inner_exclusive_access();
         process_inner.tasks.push(Some(Arc::clone(&task)));
+        process_inner.deadlock_checker.init();
         drop(process_inner);
         insert_into_pid2process(process.getpid(), Arc::clone(&process));
         // add main thread to scheduler
@@ -245,6 +311,7 @@ impl ProcessControlBlock {
                     mutex_list: Vec::new(),
                     semaphore_list: Vec::new(),
                     condvar_list: Vec::new(),
+                    deadlock_checker: DeadlockChecker::new(),
                 })
             },
         });
@@ -267,6 +334,7 @@ impl ProcessControlBlock {
         // attach task to child process
         let mut child_inner = child.inner_exclusive_access();
         child_inner.tasks.push(Some(Arc::clone(&task)));
+        child_inner.deadlock_checker.init();
         drop(child_inner);
         // modify kstack_top in trap_cx of this thread
         let task_inner = task.inner_exclusive_access();
